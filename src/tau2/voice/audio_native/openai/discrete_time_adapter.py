@@ -5,7 +5,7 @@ shared DiscreteTimeAdapter template method for tick lifecycle management.
 
 The only OpenAI-specific behavior is in _process_event: on user
 interruption (SpeechStartedEvent), the adapter calls truncate_item()
-and cancel_response() on the OpenAI API to manage server-side state.
+on the OpenAI API to inform the server how much audio was played.
 
 Usage:
     adapter = DiscreteTimeAudioNativeAdapter(
@@ -60,7 +60,7 @@ class DiscreteTimeAudioNativeAdapter(DiscreteTimeAdapter):
     """Adapter for discrete-time simulation with OpenAI Realtime API.
 
     Uses the shared DiscreteTimeAdapter template for tick lifecycle.
-    OpenAI-specific behavior: truncate_item/cancel_response on interruption.
+    OpenAI-specific behavior: truncate_item on interruption.
     """
 
     def __init__(

@@ -383,21 +383,7 @@ class OpenAIRealtimeProvider:
     async def send_tool_result(
         self, call_id: str, result: str, request_response: bool = True
     ) -> None:
-        """Send the result of a tool/function call back to the API.
-
-        After the assistant requests a function call, this method is used to
-        provide the result of that function execution.
-
-        Args:
-            call_id: The unique identifier of the function call being responded to.
-                This must match the call_id from the original function call event.
-            result: The string result of the function execution.
-            request_response: If True, immediately request the assistant to
-                continue generating a response. If False, just submit the result.
-
-        Raises:
-            RuntimeError: If not connected to the API.
-        """
+        """Send a tool result and optionally request a continuation response."""
         if not self.is_connected:
             raise RuntimeError("Not connected to API")
 
@@ -414,58 +400,13 @@ class OpenAIRealtimeProvider:
         if request_response:
             await self.ws.send(json.dumps({"type": "response.create"}))
 
-    async def cancel_response(self) -> None:
-        """Cancel an in-progress model response.
-
-        Use this in push-to-talk scenarios (when VAD is disabled) to manually
-        cancel the model's response when the user wants to interrupt. In VAD
-        mode, the server automatically cancels responses when user speech is
-        detected, so this is typically not needed.
-
-        After canceling, you should also send a truncate_item() to inform the
-        server how much audio was actually played.
-
-        Raises:
-            RuntimeError: If not connected to the API.
-        """
-        if not self.is_connected:
-            raise RuntimeError("Not connected to API")
-
-        await self.ws.send(json.dumps({"type": "response.cancel"}))
-        logger.debug("Response cancel sent")
-
     async def truncate_item(
         self,
         item_id: str,
         content_index: int,
         audio_end_ms: int,
     ) -> None:
-        """Truncate an assistant response item to remove unplayed audio.
-
-        When the user interrupts the assistant (barge-in), this method should be
-        called to inform the server how much of the response was actually played.
-        The server will truncate the audio at the specified point and remove the
-        corresponding portion of the transcript from the conversation history.
-
-        This ensures the model's memory of the conversation matches what the user
-        actually heard, enabling natural follow-ups like "what was that last thing?".
-
-        Args:
-            item_id: The item ID of the assistant's response being truncated.
-                This is the item that was interrupted.
-            content_index: Index of the content part being truncated (usually 0
-                for single-part responses).
-            audio_end_ms: Milliseconds of audio that was actually played before
-                the interruption. Audio after this point will be removed from
-                the conversation.
-
-        Raises:
-            RuntimeError: If not connected to the API.
-
-        Note:
-            The server will respond with a conversation.item.truncated event
-            to confirm the truncation.
-        """
+        """Tell the server how much audio was played before interruption."""
         if not self.is_connected:
             raise RuntimeError("Not connected to API")
 
@@ -482,22 +423,10 @@ class OpenAIRealtimeProvider:
         )
 
     async def receive_events(self) -> AsyncGenerator[BaseRealtimeEvent, None]:
-        """Receive and yield events from the WebSocket connection.
+        """Async generator yielding parsed events from the WebSocket.
 
-        An async generator that continuously listens for events from the API
-        and yields them as typed event objects. Handles connection timeouts
-        gracefully by yielding TimeoutEvent, allowing the caller to perform
-        other operations.
-
-        Yields:
-            BaseRealtimeEvent: Parsed event objects, which may be:
-                - Typed events (e.g., ResponseTextDeltaEvent, FunctionCallEvent)
-                - TimeoutEvent: When no message received within 0.1 seconds
-                - UnknownEvent: For unrecognized or error events
-
-        Raises:
-            RuntimeError: If not connected to the API when called, or if the
-                WebSocket connection closes unexpectedly during operation.
+        Yields TimeoutEvent when no message arrives within 10ms.
+        Raises RuntimeError if the connection closes unexpectedly.
         """
         if not self.is_connected:
             raise RuntimeError("Not connected to API")
