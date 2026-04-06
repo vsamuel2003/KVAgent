@@ -12,7 +12,7 @@
 
 set -e
 
-MODEL=${MODEL:-"Qwen/Qwen3-4B"}
+MODEL=${MODEL:-"Qwen/Qwen3-0.6B"}
 NUM_TASKS=${NUM_TASKS:-5}
 NUM_TRIALS=${NUM_TRIALS:-1}
 
