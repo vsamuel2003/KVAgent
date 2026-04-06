@@ -564,6 +564,10 @@ class ToolMessage(BaseModel):
         description="The requestor of the tool call.",
     )
     error: bool = Field(description="Whether the tool call failed.", default=False)
+    execution_time_seconds: Optional[float] = Field(
+        description="Wall-clock time for tool execution in seconds.",
+        default=None,
+    )
     turn_idx: Optional[int] = Field(
         description="The index of the turn in the conversation.", default=None
     )

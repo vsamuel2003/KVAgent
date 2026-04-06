@@ -137,6 +137,8 @@ class BaseOrchestrator(ABC, Generic[BaseAgentT, BaseUserT, TrajectoryItemT]):
         self.num_errors: int = 0
         self._run_start_time: Optional[str] = None
         self._run_start_perf: Optional[float] = None
+        # Profiling: per-step wall-clock timings
+        self.step_timings: list[dict] = []
 
     @abstractmethod
     def initialize(self) -> None:
@@ -322,7 +324,9 @@ class BaseOrchestrator(ABC, Generic[BaseAgentT, BaseUserT, TrajectoryItemT]):
         """
         tool_results = []
         for tool_call in tool_calls:
+            t0 = time.perf_counter()
             tool_result = self.environment.get_response(tool_call)
+            tool_result.execution_time_seconds = time.perf_counter() - t0
             if tool_result.error:
                 self.num_errors += 1
             tool_results.append(tool_result)
@@ -817,8 +821,98 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             seed=self.seed,
             mode=self.mode.value,
             speech_environment=speech_environment,
+            info={"profiling": self._build_profiling_info(messages, duration)},
         )
         return simulation_run
+
+    def _build_profiling_info(self, messages: list, duration: float) -> dict:
+        """
+        Build profiling data from the trajectory and step timings.
+
+        Correlates AssistantMessage timing/token data and ToolMessage execution
+        times with per-step wall-clock timings to produce a structured profiling dict.
+        """
+        # Walk messages to extract LLM calls and tool executions per step index
+        # We use turn_idx to group messages by step; fall back to message order
+        step_llm: dict[int, dict] = {}  # step_idx -> {llm_latency, prompt_tokens, completion_tokens}
+        step_tools: dict[int, list] = {}  # step_idx -> [{name, exec_time}]
+
+        for msg in messages:
+            if isinstance(msg, AssistantMessage):
+                idx = msg.turn_idx if msg.turn_idx is not None else len(step_llm)
+                step_llm[idx] = {
+                    "llm_latency_seconds": msg.generation_time_seconds,
+                    "prompt_tokens": msg.usage.get("prompt_tokens") if msg.usage else None,
+                    "completion_tokens": msg.usage.get("completion_tokens") if msg.usage else None,
+                }
+                # Carry tool_calls names for matching with subsequent ToolMessages
+                if msg.tool_calls:
+                    step_tools.setdefault(idx, [])
+            elif isinstance(msg, ToolMessage):
+                # Associate with the most recent assistant message turn
+                prev_idx = max(step_llm.keys()) if step_llm else 0
+                step_tools.setdefault(prev_idx, []).append({
+                    "name": msg.id,  # id carries tool call id; name not available on ToolMessage
+                    "execution_time_seconds": msg.execution_time_seconds,
+                })
+
+        # Recover tool names from AssistantMessage.tool_calls
+        tool_names: dict[str, str] = {}  # tool_call_id -> tool name
+        for msg in messages:
+            if isinstance(msg, AssistantMessage) and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    tool_names[tc.id] = tc.name
+
+        # Replace id with name in step_tools
+        for step_idx, tool_list in step_tools.items():
+            for entry in tool_list:
+                entry["name"] = tool_names.get(entry["name"], entry["name"])
+
+        # Build per-step list aligned with step_timings
+        steps = []
+        for timing in self.step_timings:
+            step_idx = timing["step"]
+            llm_data = step_llm.get(step_idx, {})
+            tool_list = step_tools.get(step_idx, [])
+            steps.append({
+                "step_idx": step_idx,
+                "wall_time_seconds": timing["wall_time_seconds"],
+                "llm_latency_seconds": llm_data.get("llm_latency_seconds"),
+                "prompt_tokens": llm_data.get("prompt_tokens"),
+                "completion_tokens": llm_data.get("completion_tokens"),
+                "tool_executions": tool_list,
+            })
+
+        # Compute aggregates
+        total_llm = sum(
+            s["llm_latency_seconds"]
+            for s in steps
+            if s["llm_latency_seconds"] is not None
+        )
+        total_tool_stall = sum(
+            e["execution_time_seconds"] or 0.0
+            for s in steps
+            for e in s["tool_executions"]
+            if e["execution_time_seconds"] is not None
+        )
+        llm_latencies = [s["llm_latency_seconds"] for s in steps if s["llm_latency_seconds"] is not None]
+        wall_times = [s["wall_time_seconds"] for s in steps]
+        total_prompt = sum(s["prompt_tokens"] or 0 for s in steps)
+        total_completion = sum(s["completion_tokens"] or 0 for s in steps)
+
+        return {
+            "episode_duration_seconds": duration,
+            "num_steps": len(steps),
+            "steps": steps,
+            "aggregates": {
+                "total_llm_time_seconds": total_llm,
+                "total_tool_stall_time_seconds": total_tool_stall,
+                "avg_step_latency_seconds": sum(wall_times) / len(wall_times) if wall_times else 0.0,
+                "avg_llm_latency_seconds": sum(llm_latencies) / len(llm_latencies) if llm_latencies else 0.0,
+                "total_prompt_tokens": total_prompt,
+                "total_completion_tokens": total_completion,
+            },
+        }
 
     def step(self):
         """
@@ -830,6 +924,7 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         """
         if self.done:
             raise ValueError("Simulation is done")
+        _step_start = time.perf_counter()
         logger.debug(
             f"Step {self.step_count}. Sending message from {self.from_role} to {self.to_role}"
         )
@@ -898,6 +993,10 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             self.check_communication_error()
         self.step_count += 1
         self.environment.sync_tools()
+        self.step_timings.append({
+            "step": self.step_count,
+            "wall_time_seconds": time.perf_counter() - _step_start,
+        })
 
     def get_trajectory(self) -> list[Message]:
         """

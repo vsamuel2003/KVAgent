@@ -614,7 +614,7 @@ def main():
             )
 
         # Set global LLM log mode (used by verbose logging)
-        from tau2.utils.llm_utils import set_llm_log_mode
+        from tau2.utils.llm_utils import set_llm_log_mode  # noqa: PLC0415
 
         set_llm_log_mode(args.llm_log_mode)
 
