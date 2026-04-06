@@ -892,11 +892,14 @@ def run_domain(config: RunConfig) -> Results:
     results_format = "dir" if is_voice else "json"
 
     # Run batch
+    # Use EvaluationType.ALL (not ALL_WITH_NL_ASSERTIONS) to avoid calling
+    # external LLM APIs for NL assertion evaluation (WIP/experimental feature).
     simulation_results = run_tasks(
         config,
         tasks,
         save_path=save_path,
         save_dir=save_dir,
+        evaluation_type=EvaluationType.ALL,
         results_format=results_format,
     )
 
