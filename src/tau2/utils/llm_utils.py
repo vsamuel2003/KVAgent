@@ -264,8 +264,9 @@ def generate(
         result = backend.generate_chat(
             messages=openai_messages,
             tools=tools_schema,
-            temperature=kwargs.get("temperature", 0.0),
-            max_new_tokens=kwargs.get("max_tokens", 4096),
+            temperature=kwargs.get("temperature", 0.7),
+            max_new_tokens=kwargs.get("max_tokens", 512),
+            repetition_penalty=kwargs.get("repetition_penalty", 1.1),
         )
     except Exception as e:
         logger.error(e)

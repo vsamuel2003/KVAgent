@@ -1,6 +1,13 @@
 """HuggingFace transformers backend for tau2 LLM calls.
 
 Supports Qwen3 models with native tool calling via apply_chat_template.
+
+GPU assignment strategy:
+- If multiple CUDA GPUs are available, each distinct model name is assigned to a
+  different GPU in round-robin order (first model → cuda:0, second → cuda:1, etc.).
+- Inference locks are per-device, so models on different GPUs can run in parallel.
+- If only one GPU (or CPU) is available, all models share it with a single
+  serialized inference lock.
 """
 import json
 import re
@@ -16,8 +23,14 @@ class HFBackend:
     """Singleton-per-model manager for HuggingFace model + tokenizer."""
 
     _instances: dict[str, "HFBackend"] = {}
-    _instance_lock: threading.Lock = threading.Lock()   # guards singleton creation
-    _inference_lock: threading.Lock = threading.Lock()  # serializes GPU inference
+    _instance_lock: threading.Lock = threading.Lock()  # guards singleton creation
+
+    # Per-device inference locks: models on different GPUs can run in parallel.
+    _device_inference_locks: dict[str, threading.Lock] = {}
+    _device_locks_lock: threading.Lock = threading.Lock()
+
+    # Round-robin GPU assignment counter (protected by _instance_lock)
+    _next_gpu_idx: int = 0
 
     def __init__(
         self,
@@ -25,7 +38,7 @@ class HFBackend:
         device_map: str = "auto",
         torch_dtype=torch.bfloat16,
     ):
-        logger.info(f"Loading HuggingFace model: {model_name}")
+        logger.info(f"Loading HuggingFace model: {model_name} → device_map={device_map}")
         self.model_name = model_name
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -34,24 +47,59 @@ class HFBackend:
             dtype=torch_dtype,
         )
         self.model.eval()
-        logger.info(f"Model {model_name} loaded successfully")
+        # Record the effective device string for per-device locking
+        self._device_str = _device_str(self.model)
+        logger.info(
+            f"Model {model_name} loaded successfully on {self._device_str}"
+        )
 
     @classmethod
-    def get(cls, model_name: str, **kwargs) -> "HFBackend":
-        """Get or create a singleton instance for the given model (thread-safe)."""
+    def get(cls, model_name: str, device_map: str | None = None, **kwargs) -> "HFBackend":
+        """Get or create a singleton instance for the given model (thread-safe).
+
+        If device_map is None and multiple CUDA GPUs are available, models are
+        assigned to GPUs in round-robin order so that distinct models land on
+        different devices.
+        """
         if model_name not in cls._instances:
             with cls._instance_lock:
-                # Re-check after acquiring lock (double-checked locking)
                 if model_name not in cls._instances:
-                    cls._instances[model_name] = cls(model_name, **kwargs)
+                    if device_map is None:
+                        device_map = cls._assign_device()
+                    cls._instances[model_name] = cls(
+                        model_name, device_map=device_map, **kwargs
+                    )
         return cls._instances[model_name]
+
+    @classmethod
+    def _assign_device(cls) -> str:
+        """Return the next CUDA device string in round-robin order.
+
+        Falls back to "auto" when fewer than 2 GPUs are available so that
+        transformers can handle single-GPU or CPU placement automatically.
+        """
+        num_gpus = torch.cuda.device_count()
+        if num_gpus >= 2:
+            device = f"cuda:{cls._next_gpu_idx % num_gpus}"
+            cls._next_gpu_idx += 1
+            return device
+        return "auto"
+
+    @classmethod
+    def _get_inference_lock(cls, device_str: str) -> threading.Lock:
+        """Return (creating if needed) the inference lock for a given device."""
+        with cls._device_locks_lock:
+            if device_str not in cls._device_inference_locks:
+                cls._device_inference_locks[device_str] = threading.Lock()
+            return cls._device_inference_locks[device_str]
 
     def generate_chat(
         self,
         messages: list[dict],
         tools: list[dict] | None = None,
-        max_new_tokens: int = 4096,
-        temperature: float = 0.0,
+        max_new_tokens: int = 512,
+        temperature: float = 0.7,
+        repetition_penalty: float = 1.1,
         **kwargs,
     ) -> dict:
         """
@@ -60,23 +108,19 @@ class HFBackend:
         Args:
             messages: OpenAI-format message dicts
             tools: OpenAI-format tool schemas (list of {"type":"function","function":{...}})
-            max_new_tokens: Max tokens to generate
-            temperature: Sampling temperature (0.0 = greedy)
+            max_new_tokens: Max tokens to generate (default 512 to avoid slow runs)
+            temperature: Sampling temperature; >0 enables do_sample=True (default 0.7)
+            repetition_penalty: Penalise repeated tokens to break loops (default 1.1)
 
         Returns:
             dict with keys: content, tool_calls, prompt_tokens, completion_tokens
         """
-        # Apply Qwen3 chat template (supports tools parameter natively)
+        # Apply Qwen3 chat template (supports tools and enable_thinking natively)
         template_kwargs: dict = {
             "tokenize": False,
             "add_generation_prompt": True,
+            "enable_thinking": False,  # disable chain-of-thought for speed
         }
-        # Qwen3-specific: disable thinking mode for faster/cleaner output
-        try:
-            template_kwargs["enable_thinking"] = False
-        except Exception:
-            pass
-
         if tools:
             template_kwargs["tools"] = tools
 
@@ -84,14 +128,19 @@ class HFBackend:
         inputs = self.tokenizer(text, return_tensors="pt").to(self.model.device)
         prompt_tokens = inputs.input_ids.shape[1]
 
-        gen_kwargs: dict = {"max_new_tokens": max_new_tokens}
+        gen_kwargs: dict = {
+            "max_new_tokens": max_new_tokens,
+            "repetition_penalty": repetition_penalty,
+            "pad_token_id": self.tokenizer.eos_token_id,
+        }
         if temperature > 0:
             gen_kwargs["do_sample"] = True
             gen_kwargs["temperature"] = temperature
         else:
             gen_kwargs["do_sample"] = False
 
-        with HFBackend._inference_lock:
+        inference_lock = HFBackend._get_inference_lock(self._device_str)
+        with inference_lock:
             with torch.no_grad():
                 outputs = self.model.generate(**inputs, **gen_kwargs)
 
@@ -107,6 +156,14 @@ class HFBackend:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
         }
+
+
+def _device_str(model: torch.nn.Module) -> str:
+    """Return a canonical device string for the model's first parameter."""
+    try:
+        return str(next(model.parameters()).device)
+    except StopIteration:
+        return "cpu"
 
 
 def _parse_qwen3_output(raw_output: str) -> tuple[str | None, list[dict] | None]:

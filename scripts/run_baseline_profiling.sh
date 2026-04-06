@@ -1,33 +1,47 @@
 #!/bin/bash
-# Run tau2 airline domain benchmark with Qwen3-4B and extract profiling CSVs.
+# Run tau2 airline domain benchmark with HuggingFace models and extract profiling CSVs.
 #
 # Usage:
 #   bash scripts/run_baseline_profiling.sh
 #
-# Environment variables (optional overrides):
-#   MODEL      - HuggingFace model ID (default: Qwen/Qwen3-4B)
-#   NUM_TASKS  - Number of tasks to run (default: 5)
-#   NUM_TRIALS - Number of trials per task (default: 1)
-#   SAVE_DIR   - Where to write results (default: auto-generated)
+# Environment variables:
+#   AGENT_MODEL  - Agent LLM (default: Qwen/Qwen3-4B)
+#   USER_MODEL   - User simulator LLM (default: Qwen/Qwen3-1.7B)
+#   NUM_TASKS    - Number of tasks to run (default: 5)
+#   NUM_TRIALS   - Number of trials per task (default: 1)
+#
+# GPU setup:
+#   1 GPU:  AGENT_MODEL and USER_MODEL share the GPU (serialized inference).
+#           Use different model sizes to reduce peak memory, e.g.:
+#             AGENT_MODEL=Qwen/Qwen3-4B USER_MODEL=Qwen/Qwen3-1.7B
+#
+#   2 GPUs: The first model loaded (agent) is assigned to cuda:0, the second
+#           (user) to cuda:1, automatically. Inference runs in parallel.
+#           Both can be the same model size:
+#             AGENT_MODEL=Qwen/Qwen3-4B USER_MODEL=Qwen/Qwen3-4B
 
 set -e
 
-MODEL=${MODEL:-"Qwen/Qwen3-0.6B"}
+AGENT_MODEL=${AGENT_MODEL:-"Qwen/Qwen3-4B"}
+USER_MODEL=${USER_MODEL:-"Qwen/Qwen3-1.7B"}
 NUM_TASKS=${NUM_TASKS:-5}
 NUM_TRIALS=${NUM_TRIALS:-1}
 
 echo "=== Tau2 Baseline Profiling Run ==="
-echo "Model:      $MODEL"
-echo "Domain:     airline"
-echo "Num tasks:  $NUM_TASKS"
-echo "Num trials: $NUM_TRIALS"
+echo "Agent model: $AGENT_MODEL"
+echo "User model:  $USER_MODEL"
+echo "Domain:      airline"
+echo "Num tasks:   $NUM_TASKS"
+echo "Num trials:  $NUM_TRIALS"
 echo ""
 
-# Run benchmark (--max-concurrency 1: serialize tasks on single GPU to avoid CUDA deadlocks)
+# Run benchmark
+# --max-concurrency 1: serialize tasks (correct for shared-GPU setups).
+#   With 2 GPUs, inference within a task still runs on separate devices.
 tau2 run \
     --domain airline \
-    --agent-llm "$MODEL" \
-    --user-llm "$MODEL" \
+    --agent-llm "$AGENT_MODEL" \
+    --user-llm "$USER_MODEL" \
     --num-tasks "$NUM_TASKS" \
     --num-trials "$NUM_TRIALS" \
     --max-concurrency 1 \
@@ -35,11 +49,10 @@ tau2 run \
     --log-level INFO
 
 # Find the latest results directory for the airline domain
-RESULTS_PATH=$(ls -td data/results/airline_* 2>/dev/null | head -1)/results.json
+RESULTS_PATH=$(ls -td data/simulations/20*airline* 2>/dev/null | head -1)/results.json
 
 if [ ! -f "$RESULTS_PATH" ]; then
-    echo "ERROR: Could not find results file at $RESULTS_PATH"
-    echo "Check data/results/ for the output directory."
+    echo "ERROR: Could not find results file. Check data/simulations/ for the output directory."
     exit 1
 fi
 
