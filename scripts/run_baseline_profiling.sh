@@ -5,25 +5,21 @@
 #   bash scripts/run_baseline_profiling.sh
 #
 # Environment variables:
-#   AGENT_MODEL  - Agent LLM (default: Qwen/Qwen3-4B)
-#   USER_MODEL   - User simulator LLM (default: Qwen/Qwen3-1.7B)
+#   AGENT_MODEL  - Agent LLM (default: Qwen/Qwen3-4B-Instruct-2507)
+#   USER_MODEL   - User simulator LLM (default: Qwen/Qwen3-4B-Instruct-2507)
 #   NUM_TASKS    - Number of tasks to run (default: 5)
 #   NUM_TRIALS   - Number of trials per task (default: 1)
 #
 # GPU setup:
 #   1 GPU:  AGENT_MODEL and USER_MODEL share the GPU (serialized inference).
-#           Use different model sizes to reduce peak memory, e.g.:
-#             AGENT_MODEL=Qwen/Qwen3-4B USER_MODEL=Qwen/Qwen3-1.7B
-#
 #   2 GPUs: The first model loaded (agent) is assigned to cuda:0, the second
 #           (user) to cuda:1, automatically. Inference runs in parallel.
-#           Both can be the same model size:
-#             AGENT_MODEL=Qwen/Qwen3-4B USER_MODEL=Qwen/Qwen3-4B
+#             AGENT_MODEL=Qwen/Qwen3-4B-Instruct-2507 USER_MODEL=Qwen/Qwen3-4B-Instruct-2507
 
 set -e
 
-AGENT_MODEL=${AGENT_MODEL:-"Qwen/Qwen3-4B"}
-USER_MODEL=${USER_MODEL:-"Qwen/Qwen3-1.7B"}
+AGENT_MODEL=${AGENT_MODEL:-"Qwen/Qwen3-4B-Instruct-2507"}
+USER_MODEL=${USER_MODEL:-"Qwen/Qwen3-4B-Instruct-2507"}
 NUM_TASKS=${NUM_TASKS:-5}
 NUM_TRIALS=${NUM_TRIALS:-1}
 
