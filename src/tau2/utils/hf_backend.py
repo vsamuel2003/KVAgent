@@ -4,6 +4,7 @@ Supports Qwen3 models with native tool calling via apply_chat_template.
 """
 import json
 import re
+import threading
 import uuid
 
 import torch
@@ -15,6 +16,8 @@ class HFBackend:
     """Singleton-per-model manager for HuggingFace model + tokenizer."""
 
     _instances: dict[str, "HFBackend"] = {}
+    _instance_lock: threading.Lock = threading.Lock()   # guards singleton creation
+    _inference_lock: threading.Lock = threading.Lock()  # serializes GPU inference
 
     def __init__(
         self,
@@ -28,16 +31,19 @@ class HFBackend:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             device_map=device_map,
-            torch_dtype=torch_dtype,
+            dtype=torch_dtype,
         )
         self.model.eval()
         logger.info(f"Model {model_name} loaded successfully")
 
     @classmethod
     def get(cls, model_name: str, **kwargs) -> "HFBackend":
-        """Get or create a singleton instance for the given model."""
+        """Get or create a singleton instance for the given model (thread-safe)."""
         if model_name not in cls._instances:
-            cls._instances[model_name] = cls(model_name, **kwargs)
+            with cls._instance_lock:
+                # Re-check after acquiring lock (double-checked locking)
+                if model_name not in cls._instances:
+                    cls._instances[model_name] = cls(model_name, **kwargs)
         return cls._instances[model_name]
 
     def generate_chat(
@@ -85,8 +91,9 @@ class HFBackend:
         else:
             gen_kwargs["do_sample"] = False
 
-        with torch.no_grad():
-            outputs = self.model.generate(**inputs, **gen_kwargs)
+        with HFBackend._inference_lock:
+            with torch.no_grad():
+                outputs = self.model.generate(**inputs, **gen_kwargs)
 
         new_tokens = outputs[0][prompt_tokens:]
         completion_tokens = len(new_tokens)

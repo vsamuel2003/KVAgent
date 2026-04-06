@@ -23,13 +23,14 @@ echo "Num tasks:  $NUM_TASKS"
 echo "Num trials: $NUM_TRIALS"
 echo ""
 
-# Run benchmark
+# Run benchmark (--max-concurrency 1: serialize tasks on single GPU to avoid CUDA deadlocks)
 tau2 run \
     --domain airline \
     --agent-llm "$MODEL" \
     --user-llm "$MODEL" \
     --num-tasks "$NUM_TASKS" \
     --num-trials "$NUM_TRIALS" \
+    --max-concurrency 1 \
     --verbose-logs \
     --log-level INFO
 
