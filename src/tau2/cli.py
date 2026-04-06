@@ -163,8 +163,9 @@ def add_run_args(parser):
     )
     parser.add_argument(
         "--log-level",
-        type=str,
+        type=str.upper,
         default=DEFAULT_LOG_LEVEL,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help=f"The log level to use for the simulation. Default is {DEFAULT_LOG_LEVEL}.",
     )
     parser.add_argument(

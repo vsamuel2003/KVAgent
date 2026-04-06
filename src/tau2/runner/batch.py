@@ -490,9 +490,10 @@ def run_tasks(
     if isinstance(save_path, str):
         save_path = Path(save_path)
 
-    # Set log level from config
+    # Set log level from config (normalize to uppercase for loguru)
+    log_level = (config.log_level or "ERROR").upper()
     logger.remove()
-    logger.add(lambda msg: print(msg), level=config.log_level)
+    logger.add(lambda msg: print(msg), level=log_level)
 
     if len(tasks) == 0:
         raise ValueError("No tasks to run")
