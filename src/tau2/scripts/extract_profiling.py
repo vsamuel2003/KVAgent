@@ -38,6 +38,8 @@ def extract_summary(simulations: list[dict]) -> list[dict]:
             "avg_llm_latency_seconds": aggregates.get("avg_llm_latency_seconds", 0.0),
             "total_prompt_tokens": aggregates.get("total_prompt_tokens", 0),
             "total_completion_tokens": aggregates.get("total_completion_tokens", 0),
+            "avg_peak_gpu_memory_mb": aggregates.get("avg_peak_gpu_memory_mb", 0.0),
+            "total_tool_idle_window_seconds": aggregates.get("total_tool_idle_window_seconds", 0.0),
             "reward": reward,
             "termination_reason": sim.get("termination_reason", ""),
         })
@@ -69,6 +71,10 @@ def extract_detailed(simulations: list[dict]) -> list[dict]:
                 "completion_tokens": step.get("completion_tokens"),
                 "num_tool_calls": len(tool_execs),
                 "tool_stall_time_seconds": tool_stall,
+                "gpu_memory_before_mb": step.get("gpu_memory_before_mb"),
+                "gpu_memory_after_mb": step.get("gpu_memory_after_mb"),
+                "kv_cache_estimate_mb": step.get("kv_cache_estimate_mb"),
+                "tool_idle_window_seconds": step.get("tool_idle_window_seconds", 0.0),
             })
     return rows
 

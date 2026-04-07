@@ -844,6 +844,9 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                     "llm_latency_seconds": msg.generation_time_seconds,
                     "prompt_tokens": msg.usage.get("prompt_tokens") if msg.usage else None,
                     "completion_tokens": msg.usage.get("completion_tokens") if msg.usage else None,
+                    "gpu_memory_before_mb": msg.usage.get("gpu_memory_before_mb") if msg.usage else None,
+                    "gpu_memory_after_mb": msg.usage.get("gpu_memory_after_mb") if msg.usage else None,
+                    "kv_cache_estimate_mb": msg.usage.get("kv_cache_estimate_mb") if msg.usage else None,
                 }
                 # Carry tool_calls names for matching with subsequent ToolMessages
                 if msg.tool_calls:
@@ -874,12 +877,19 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
             step_idx = timing["step"]
             llm_data = step_llm.get(step_idx, {})
             tool_list = step_tools.get(step_idx, [])
+            llm_latency = llm_data.get("llm_latency_seconds") or 0.0
+            has_tools = len(tool_list) > 0
+            tool_idle_window = (timing["wall_time_seconds"] - llm_latency) if has_tools else 0.0
             steps.append({
                 "step_idx": step_idx,
                 "wall_time_seconds": timing["wall_time_seconds"],
                 "llm_latency_seconds": llm_data.get("llm_latency_seconds"),
                 "prompt_tokens": llm_data.get("prompt_tokens"),
                 "completion_tokens": llm_data.get("completion_tokens"),
+                "gpu_memory_before_mb": llm_data.get("gpu_memory_before_mb"),
+                "gpu_memory_after_mb": llm_data.get("gpu_memory_after_mb"),
+                "kv_cache_estimate_mb": llm_data.get("kv_cache_estimate_mb"),
+                "tool_idle_window_seconds": tool_idle_window,
                 "tool_executions": tool_list,
             })
 
@@ -899,6 +909,8 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
         wall_times = [s["wall_time_seconds"] for s in steps]
         total_prompt = sum(s["prompt_tokens"] or 0 for s in steps)
         total_completion = sum(s["completion_tokens"] or 0 for s in steps)
+        peak_mem_values = [s["gpu_memory_after_mb"] for s in steps if s["gpu_memory_after_mb"] is not None]
+        total_idle_window = sum(s["tool_idle_window_seconds"] for s in steps)
 
         return {
             "episode_duration_seconds": duration,
@@ -911,6 +923,8 @@ class Orchestrator(BaseOrchestrator[AgentT, UserT, Message]):
                 "avg_llm_latency_seconds": sum(llm_latencies) / len(llm_latencies) if llm_latencies else 0.0,
                 "total_prompt_tokens": total_prompt,
                 "total_completion_tokens": total_completion,
+                "avg_peak_gpu_memory_mb": sum(peak_mem_values) / len(peak_mem_values) if peak_mem_values else 0.0,
+                "total_tool_idle_window_seconds": total_idle_window,
             },
         }
 

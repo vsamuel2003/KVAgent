@@ -288,6 +288,9 @@ def generate(
     usage = {
         "prompt_tokens": result["prompt_tokens"],
         "completion_tokens": result["completion_tokens"],
+        "gpu_memory_before_mb": result.get("gpu_memory_before_mb", 0.0),
+        "gpu_memory_after_mb": result.get("gpu_memory_after_mb", 0.0),
+        "kv_cache_estimate_mb": result.get("kv_cache_estimate_mb", 0.0),
     }
 
     message = AssistantMessage(

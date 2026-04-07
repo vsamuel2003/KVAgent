@@ -139,10 +139,21 @@ class HFBackend:
         else:
             gen_kwargs["do_sample"] = False
 
+        device = self.model.device
+        cuda_available = device.type == "cuda"
+
+        if cuda_available:
+            mem_before = torch.cuda.memory_allocated(device)
+
         inference_lock = HFBackend._get_inference_lock(self._device_str)
         with inference_lock:
             with torch.no_grad():
                 outputs = self.model.generate(**inputs, **gen_kwargs)
+
+        if cuda_available:
+            mem_after = torch.cuda.memory_allocated(device)
+        else:
+            mem_before = mem_after = 0
 
         new_tokens = outputs[0][prompt_tokens:]
         completion_tokens = len(new_tokens)
@@ -150,11 +161,21 @@ class HFBackend:
 
         content, tool_calls = _parse_qwen3_output(raw_output)
 
+        # Analytical KV cache size estimate (bfloat16 = 2 bytes per element)
+        cfg = self.model.config
+        num_layers = getattr(cfg, "num_hidden_layers", 0)
+        num_kv_heads = getattr(cfg, "num_key_value_heads", getattr(cfg, "num_attention_heads", 0))
+        head_dim = getattr(cfg, "hidden_size", 0) // max(getattr(cfg, "num_attention_heads", 1), 1)
+        kv_bytes = 2 * num_layers * num_kv_heads * head_dim * prompt_tokens * 2
+
         return {
             "content": content,
             "tool_calls": tool_calls,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            "gpu_memory_before_mb": mem_before / (1024 ** 2),
+            "gpu_memory_after_mb": mem_after / (1024 ** 2),
+            "kv_cache_estimate_mb": kv_bytes / (1024 ** 2),
         }
 
 
